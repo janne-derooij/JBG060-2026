@@ -24,7 +24,7 @@ def load_dartmouth_data() -> dict[int, pd.DataFrame]:
     
     """
 
-    base_path: str = './JBG060-2025/raw_data/Darthmouth Flood Observatory'
+    base_path: str = './raw_data/Darthmouth Flood Observatory'
     data_info = pd.read_excel(base_path + '/information.xlsx')
 
     print("Information regarding each station:")
@@ -59,7 +59,7 @@ def load_lake_stations() -> dict[int, pd.DataFrame]:
     
     """
     lake_names = ['victoria', 'Kyoga', 'Albert']
-    base_path: str = './JBG060-2025/raw_data/Water levels lakes'
+    base_path: str = './raw_data/Water levels lakes'
 
     data = {}
     for name in lake_names:
@@ -134,7 +134,7 @@ def load_rainfall_runoff(years: np.ndarray) -> xr.Dataset:
     
     """
     variables = ['tp', 'ro']
-    base_path: str = './JBG060-2025/raw_data/rainfall and runoff' 
+    base_path: str = './raw_data/rainfall and runoff' 
 
 
     datasets = []
@@ -148,6 +148,7 @@ def load_rainfall_runoff(years: np.ndarray) -> xr.Dataset:
     t0 = pd.Timestamp(ds_daily.valid_time.values[0]).strftime('%Y-%m-%d')
     t1 = pd.Timestamp(ds_daily.valid_time.values[-1]).strftime('%Y-%m-%d')
     print(f"Daily total precipitation and runoff from ERA5 reanalysis loaded from dates {t0} to {t1}")
+    print(ds_daily)
 
     return ds_daily
 
@@ -177,8 +178,8 @@ def process_ET(year:int, target_longitude : float = 30.725, target_latitude : fl
 
     """
      
-    ET_dir = Path(f'./JBG060-2025/raw_data/evapotranspiration/ET_{year}')
-    out_dir = Path(f'./JBG060-2025/processing_data/evapotranspiration')
+    ET_dir = Path(f'./raw_data/evapotranspiration/ET_{year}')
+    out_dir = Path(f'./processing_data/evapotranspiration')
     out_dir.mkdir(parents=True, exist_ok=True)
     variable = 'ReferenceET_PenmanMonteith_FAO56'
 
@@ -217,29 +218,18 @@ def load_processed_ET(years: np.ndarray, target_longitude : float, target_latitu
     
     """
 
-    base_path = Path(f'./JBG060-2025/processing_data/evapotranspiration')
+    base_path = Path(f'./processing_data/evapotranspiration')
     lat_str = f"{target_latitude:.3f}N"
     lon_str = f"{target_longitude:.3f}E"
 
     data = {}
     for year in years:
         df = pd.read_csv(f'{base_path}/ET_{year}_{lat_str}_{lon_str}_processed.csv')
-        print(df.head())
         data[year] = df
+
+    print(data[years[0]].head())
         
     return data
-
-### Example usage:
-# years = np.arange(2000,2003)
-# target_longitude    = 30.725
-# target_latitude     = 9.475
-
-# ## process data once
-# # for year in years:
-# #     process_ET(year)
-
-# ## Then load the processed data
-# load_processed_ET(years, target_longitude, target_latitude)
 
 
 def load_flood_masks(years : int, bbox : dict = None):
@@ -272,7 +262,7 @@ def load_flood_masks(years : int, bbox : dict = None):
     """
 
     tiles = ['h20v08', 'h21v08']
-    base_path = f'./JBG060-2025/raw_data/flood_masks'
+    base_path = f'./raw_data/flood_masks'
     
     recurring_parts = []
     unusual_parts   = []
@@ -330,16 +320,38 @@ def flood_mask_bbox(df: pd.DataFrame, bbox: dict) -> pd.DataFrame:
     )
     return df[mask].reset_index(drop=True)
 
-### Example usage:
-years = np.arange(2000,2005)
 
-local_bbox = {'lat_min': 8.0, 'lat_max': 11.0, 'lon_min': 29.0, 'lon_max': 32.0}
-df_local = load_flood_masks(years, bbox=local_bbox)
+def main():
+    ## Example usage of loading all data
+    load_dartmouth_data()   ## Discharge stations in Nile basin
+    load_lake_stations()    ## Lake water level data
 
-
-print(df_local.head())
-print(f"Flood events in bbox: {len(df_local)}")
-print(f"Recurring : {(df_local['flood_type'] == 0).sum()}")
-print(f"Unusual   : {(df_local['flood_type'] == 1).sum()}")
+    years = np.arange(2000, 2003)
+    load_rainfall_runoff(years)     ## Rainfall and runoff data from ERA5 reanalysis
 
 
+    ## Evapotranspiration at a certain grid location:
+    target_longitude    = 30.725
+    target_latitude     = 9.475
+
+    # # process data once
+    # for year in years:
+    #     process_ET(year)
+
+    ## Then load the processed data
+    load_processed_ET(years, target_longitude, target_latitude)
+
+    ## Flood masks at a bounding box:
+    local_bbox = {'lat_min': 8.0, 'lat_max': 11.0, 'lon_min': 29.0, 'lon_max': 32.0}
+    df_local = load_flood_masks(years, bbox=local_bbox)
+
+    print(df_local.head())
+    print(f"Flood events in bbox: {len(df_local)}")
+    print(f"Recurring : {(df_local['flood_type'] == 0).sum()}")
+    print(f"Unusual   : {(df_local['flood_type'] == 1).sum()}")
+
+
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,4 @@
-# JBG060-2025
+# JBG060-2026
 Repository for the course JBG060 in 2026, investigating flood dynamics in South Sudan
 
 The data that we have prepared as a starting position can be downloaded from
