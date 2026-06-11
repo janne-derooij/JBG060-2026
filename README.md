@@ -28,8 +28,8 @@ If you are using conda:
 // pip install -r requirements.txt
 ```
 
-4) Run the project:\\
-loading.py loads the hydrological/meteorological data\\
+4) Run the project:<br>
+loading.py loads the hydrological/meteorological data<br>
 loading_impact.py loads the exposure/impact data that we provide.
 
 
