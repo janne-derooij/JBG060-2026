@@ -6,8 +6,16 @@ import numpy as np
 from pathlib import Path
 import json
 import rasterio 
+import rioxarray as rxr
 from rasterio.windows import from_bounds
-from affine import Affine
+import glob
+import re
+
+## for open streetmap
+import osmnx as ox
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import os
 
 
 #### NOTE: FIRST DOWNLOAD THE RAW DATA FROM SURFDRIVE
@@ -74,7 +82,7 @@ def load_worldpop_area(bbox : dict) -> dict[int, pd.DataFrame]:
             )
             
             ## Load the data in this window
-            arr = src.read(1, window=window).astype(np.float32)
+            arr = src.read(window=window).astype(np.float32)
 
             # Mask nodata
             if src.nodata is not None:
@@ -86,13 +94,282 @@ def load_worldpop_area(bbox : dict) -> dict[int, pd.DataFrame]:
 
     return pop_total
 
+def download_OSM_network(name : str):
+    """
+    OpenStreetMap (OSM) has a built-in Python library, with which road networks can be downloaded.
+
+    Here, we provide an example how to do so for the city Malakal, extracting the "drive" network.
+    
+    """
+    output_dir = f'./raw_data/OSM/{name}'
+    os.makedirs(output_dir, exist_ok=True)
+
+    G = ox.graph_from_place(name, network_type='drive')
+
+    ## Convert networkx graph
+    nodes, edges = ox.graph_to_gdfs(G)
+
+    ## Save file
+    nodes.to_file(output_dir + './nodes.shp')
+    edges.to_file(output_dir + './edges.shp')
+    print(f"Graph files saved in {output_dir}")
+
+    ox.plot_graph(G)
+
+    return G
+
+def plot_network(name : str):
+    """
+    Loads a previously saved OSM graph from shapefiles.
+    """
+    output_dir = Path(f'./raw_data/OSM/{name}')
+
+    nodes = gpd.read_file(output_dir / 'nodes.shp')
+    edges = gpd.read_file(output_dir / 'edges.shp')
+
+    # Reconstruct the networkx graph from the GeoDataFrames
+    G = ox.graph_from_gdfs(nodes.set_index('osmid'), edges.set_index(['u', 'v', 'key']))
+    ox.plot_graph(G)
+
+    print(f"Loaded graph: {len(nodes)} nodes, {len(edges)} edges")
+    return G, nodes, edges
+
+def load_health_facilities():
+    """ 
+    We load the static dataset provided by UN OCHA regarign the types of health facilities present at the Payam level, over South Sudan.
+    
+    Last modified: 8 October 2024
+    Resource ID: dc7413b0-f68d-4c1f-b15e-cdd433a93d3d
+
+    It contains the location and type of all mapped health facilities in South Sudan.
+
+    Downloaded from: https://data.humdata.org/dataset/south-sudan-health-facilities
+
+    The different types of health care units included are:
+    - Hospital
+    - Primary Health Care Unit      (PHCU)
+    - Primary Health Care Center    (PHCC)
+
+    `` PHCUs are the first level of primary care and provide basic preventive, promotive and curative services and expected 
+    to serve a population of 15,000. PHCCs, aimed at serving a population of 50,000, are the immediate reference facilities 
+    for the PHCUs, providing all the services provided by a PHCU but in theory additional services covering diagnostic laboratory, 
+    maternity and inpatient care."
+     
+        Macharia PM, Ouma PO, Gogo EG, Snow RW, Noor AM. 
+        Spatial accessibility to basic public health services in South Sudan. 
+        Geospatial Health. 2017 May;12(1):510. DOI: 10.4081/gh.2017.510. PMID: 28555479; PMCID: PMC5483170. 
+
+    """
+    fname = './raw_data/ss_final_master_list_of-hfs-_codes_2023_20240615.xlsx'
+    health_facilities = pd.read_excel(fname)
+
+    return health_facilities
+
+def load_cattle() -> pd.DataFrame:
+    """
+    This data contains the Cattle population count at pixel level in the Greater Horn of Africa.
+
+    The data is from Harvard dataverse 2010, uploaded by ICPAC in October 2018.
+
+    Downloaded from : https://geoportal.icpac.net/layers/geonode:cattle_gha/metadata_detail
+
+    This function returns a dataframe with index name 'x', representing the longitudes, and column name 'y', with each column being a latitude.
+    It returns the dataframe, as well as the longitudes and latitudes.        
+            
+    """
+
+
+    fname = './raw_data/geonode__cattle_gha.tif'
+    data = rxr.open_rasterio(fname)
+    nan_value   = data.rio.nodata
+
+    df = data[0].to_pandas()
+    longitudes = df.columns.values
+    latitudes = df.index.values
+
+    df = df.replace(nan_value, np.nan)
+
+    return df, longitudes, latitudes
+
+def load_cropmask(bbox : dict) -> xr.DataArray:
+    """
+    This dataset contains crop masks at 0.004464285715 degree resolution (about 1/4 square kilometer). 
+    Each pixel represents the area fraction of the specific cover (i.e. percentage of the pixel with crops).
+    Data ranges between 1 and 100 showing the % value. 
+
+    This is static data, last updated on December 1st, 2023.
+    
+    Downloaded from: https://agricultural-production-hotspots.ec.europa.eu/download.php
+    """
+
+    fname = './raw_data/asap_mask_crop_v04.tif'
+    with rasterio.open(fname) as src:
+        ### Load the window based on our bounding box
+        window = from_bounds(
+            bbox['lon_min'], bbox['lat_min'],
+            bbox['lon_max'], bbox['lat_max'],
+            src.transform
+        )
+        arr = src.read(1, window=window).astype(np.float32)
+
+        ### Extract the transformation
+        win_transform = rasterio.windows.transform(window, src.transform)
+
+        ### Initialize the longitude (column) and latitude (row) center coordinates 
+        rows, cols = arr.shape
+        col_indexes = np.arange(cols)
+        row_indexes = np.arange(rows)
+
+        ### Define the spatial coordinates corresponding to the center of each pixel
+        longitudes, _ = rasterio.transform.xy(win_transform, np.zeros_like(col_indexes), col_indexes, offset="center")
+        _, latitudes = rasterio.transform.xy(win_transform, row_indexes, np.zeros_like(row_indexes), offset="center")
+
+    # 4. Wrap into an Xarray DataArray
+    da = xr.DataArray(
+        data=arr,
+        coords={"latitude": latitudes, "longitude": longitudes},
+        dims=["latitude", "longitude"],
+        name="crop_mask"
+    )
+
+    return da
+
+def load_rangeland_mask(bbox : dict) -> xr.DataArray:
+    """
+    This dataset contains crop masks at 0.004464285715 degree resolution (about 1/4 square kilometer). 
+    Each pixel represents the area fraction of the specific cover (i.e. percentage of the pixel with rangeland).
+    Data ranges between 1 and 100 showing the % value. 
+
+    This is static data, last updated on December 1st, 2023.
+    
+    Downloaded from: https://agricultural-production-hotspots.ec.europa.eu/download.php
+
+    """
+
+    fname = './raw_data/asap_mask_rangeland_v04.tif'
+    with rasterio.open(fname) as src:
+        ### Load the window based on our bounding box
+        window = from_bounds(
+            bbox['lon_min'], bbox['lat_min'],
+            bbox['lon_max'], bbox['lat_max'],
+            src.transform
+        )
+        arr = src.read(1, window=window).astype(np.float32)
+
+        ### Extract the transformation
+        win_transform = rasterio.windows.transform(window, src.transform)
+
+        ### Initialize the longitude (column) and latitude (row) center coordinates 
+        rows, cols = arr.shape
+        col_indexes = np.arange(cols)
+        row_indexes = np.arange(rows)
+
+        ### Define the spatial coordinates corresponding to the center of each pixel
+        longitudes, _ = rasterio.transform.xy(win_transform, np.zeros_like(col_indexes), col_indexes, offset="center")
+        _, latitudes = rasterio.transform.xy(win_transform, row_indexes, np.zeros_like(row_indexes), offset="center")
+
+    # 4. Wrap into an Xarray DataArray
+    da = xr.DataArray(
+        data=arr,
+        coords={"latitude": latitudes, "longitude": longitudes},
+        dims=["latitude", "longitude"],
+        name="rangeland"
+    )
+
+    return da
+
+def load_GDP() -> pd.DataFrame:
+    """
+    Loads the data of World Bank containing several World Development Indicators.
+
+    Extracts the GDP of South Sudan at which this data is known (2008-2015), and returns this as a dictionary.
+
+    GDP is expressed in USD.
+
+    Downloaded from: https://data.worldbank.org/country/south-sudan
+    
+    """
+
+    data = pd.read_csv("./raw_data/GDP/API_SSD_DS2_en_csv_v2_2529.csv", skiprows=4)
+    gdp = data[data["Indicator Name"] == "GDP (current US$)"]
+    gdp = gdp.dropna(axis=1)
+    print(gdp)
+
+    GDP_dict = {}
+    for year in np.arange(2008, 2016):
+        GDP_dict[year] = gdp[str(year)].values[0]
+
+    return GDP_dict
+
+def load_ipc_data() -> pd.DataFrame:
+    """
+    We load the IPC data on county-level for South Sudan.
+
+    We have downloaded the data available between 2022-2025, and extract the number of people classified to be in phase IPC3+ per county.
+
+    A person's household with status classified as IPC3+ means it is classified as crisis, emergency or catastrophic/famine, meaning that
+    urgent action is required to reduce the acute food insecurity.
+
+    This data is available in three-month windows, not spanning the entire year. Data for different years is available on the website.
+
+    Data downloaded from: https://www.ipcinfo.org/ipc-country-analysis/en/ 
+
+
+    """
+    folder_name = './raw_data/IPC/'
+    fnames = [f for f in os.listdir(folder_name) if os.path.isfile(os.path.join(folder_name, f))]
+
+    all_counties = []
+
+    for filename in fnames:
+        filepath = folder_name + filename
+        df = pd.read_excel(filepath)
+
+        df["is_county"] = df["Area Name"].str.startswith("  ")
+        df["Area Name"] = df["Area Name"].str.strip()
+
+        df["State"] = df["Area Name"].where(~df["is_county"]).ffill()
+        df.loc[~df["is_county"], "State"] = df.loc[~df["is_county"], "Area Name"]
+
+        counties = df[df["is_county"]].copy()
+        counties = counties.rename(columns={"Area Name": "County"})
+
+        counties["Current - From Date"] = pd.to_datetime(counties["Current - From Date"], unit ='D')
+        counties["Current - Thru Date"] = pd.to_datetime(counties["Current - Thru Date"], unit ='D')
+
+        all_counties.append(counties[["Current - From Date", "Current - Thru Date", "County", "Current - Phase 3+"]])
+
+    combined = pd.concat(all_counties, ignore_index=True)
+    combined = combined.rename(columns={
+        "Current - From Date": "Start Date",
+        "Current - Thru Date": "End Date",
+        "Current - Phase 3+": "Phase 3+ Pop"
+    })
+
+    # Pivot so each county is a column, value = Phase 3+ population
+    result = combined.pivot_table(
+        index=["Start Date", "End Date"],
+        columns="County",
+        values="Phase 3+ Pop"
+    ).reset_index()
+
+    result = result.sort_values("Start Date").reset_index(drop=True)
+
+    return result
+
+
+
+
 
 def main():
     """Example usage"""
 
-    ## Loading population data at a single location:
 
-    ## location at which there are people
+    ### 1) population data
+
+    # Loading population data at a single location:
+
+    # location at which there are people
     pop_loc = load_worldpop_coordinate(31.046249993815, 9.473750002105)
     print(f"Location with population : lon = 31.046249993815, lat = 9.473750002105" )
     for year, count in pop_loc.items():
@@ -107,6 +384,7 @@ def main():
         print(f"Year {year} has total population count of {count}")
     print("")
     
+    ## Loading the data for an area
 
     bbox_ex = {}
     bbox_ex['lon_min'] = 29.5
@@ -118,6 +396,61 @@ def main():
     print("Area : ", bbox_ex)
     for year, count in pop_area.items():
         print(f"Year {year} has total population count of {count}")
+
+    ## 2) Road network from Open Streetmap
+    city_name = "Malakal, South Sudan"
+    ## Download network once:
+    download_OSM_network(city_name)
+
+    ## Then plotting the network
+    G = plot_network(f"{city_name}")
+
+    ## 3) Loading the health facility data
+    hf = load_health_facilities()
+
+    ## 4) Grazing cattle
+    df, longitudes, latitudes = load_cattle()
+    lon_value = longitudes[15]
+    grazing_lats = latitudes[np.nonzero(df[lon_value].notna())]
+    print(f"at longitude {lon_value} there are cattle grazing at latitudes {grazing_lats}"  )
+    lat_value = grazing_lats[-1]
+
+    print(f"at (long, lat) = ({lon_value}, {lat_value}), there are {df.loc[lat_value, lon_value]} cattle grazing")
+
+    ## 5) Cropland mask
+    bbox_ssd = {}
+    bbox_ssd['lon_min'] = 24
+    bbox_ssd['lat_min'] = 3
+    bbox_ssd['lon_max'] = 36
+    bbox_ssd['lat_max'] = 13
+
+    cropmask_da = load_cropmask(bbox_ssd)
+    target_lat, target_lon = 9.475, 30.725
+    crop_val = cropmask_da.sel(latitude=target_lat, longitude=target_lon, method="nearest")
+    print(f"At (lat, long) = ({target_lat}, {target_lon}) , a % of {crop_val} is cropland")
+
+    cropmask_da.plot(cmap="YlGn", vmin=0, vmax=100)
+    plt.title("Crop Mask (area percentage)")
+    plt.show()
+
+    ## 6) Rangeland mask
+    rangeland_da = load_rangeland_mask(bbox_ssd)
+    rangeland_val = cropmask_da.sel(latitude=target_lat, longitude=target_lon, method="nearest")
+    print(f"At (lat, long) = ({target_lat}, {target_lon}) , a % of {rangeland_val} is rangeland")
+
+    rangeland_da.plot(cmap="YlGn", vmin=0, vmax=100)
+    plt.title("Rangeland Mask (area percentage)")
+    plt.show()
+
+    ### 7) Load GDP data
+    GDP_dict = load_GDP()
+    print(GDP_dict)    
+
+    ### 8) Load GDP data
+    phase3plus = load_ipc_data()
+    print(phase3plus)
+
+
 
 if __name__ == "__main__":
     main()
