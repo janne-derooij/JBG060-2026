@@ -4,6 +4,29 @@ Repository for the course JBG060 in 2026, investigating flood dynamics in South 
 The data that we have prepared as a starting position can be downloaded from
 https://surfdrive.surf.nl/s/45yFwCAWmXb63Ec with password 3F7rq7kEET
 
-Please downloadd this data, and save it in a folder called `raw_data' as a sub-folder of this directory.
+Please follow the following steps:
+1) Clone this repository:
+
+git clone https://github.com/janne-derooij/JBG060-2026
+
+2) Download the data from surfdrive, and place it in a fub-folder of JBG060-2026, called 'raw_data'.
+
+3) Set up the environment: 
+
+If you are using venv:
+py -m venv myenv
+myenv\Scripts\activate
+pip install -r requirements.txt
+
+If you are using conda:
+conda create -n myenv python=3.14
+conda activate myenv
+pip install -r requirements.txt
+
+4) Run the project:
+loading.py loads the hydrological/meteorological data
+loading_impact.py loads the exposure/impact data that we provide
+
+
 
 
