@@ -28,9 +28,9 @@ If you are using conda:
 // pip install -r requirements.txt
 ```
 
-4) Run the project:
-loading.py loads the hydrological/meteorological data
-loading_impact.py loads the exposure/impact data that we provide
+4) Run the project:\\
+loading.py loads the hydrological/meteorological data\\
+loading_impact.py loads the exposure/impact data that we provide.
 
 
 
